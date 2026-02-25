@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import ScorecardSubnav from "../components/ScorecardSubnav";
 import { useScorecardStore } from "../store/useScorecardStore";
 import type { RoleWithKRAs, ScorecardTarget } from "../types/scorecard";
 import { getMonthName } from "../utils/formatters";
@@ -27,6 +27,12 @@ export default function ScorecardTargetsPage() {
   useEffect(() => {
     fetchRoles();
   }, [fetchRoles]);
+
+  useEffect(() => {
+    if (!selectedRole && roles.length > 0) {
+      setSelectedRole(roles[0].id);
+    }
+  }, [roles, selectedRole]);
 
   // Load role data when role changes
   useEffect(() => {
@@ -132,19 +138,12 @@ export default function ScorecardTargetsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="flex flex-col gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Scorecard Targets</h1>
-          <p className="text-gray-600 mt-1">
-            Set monthly KPI targets for each role
-          </p>
+          <p className="text-gray-600 mt-1">Set monthly KPI targets for each role</p>
+          <ScorecardSubnav className="mt-4" />
         </div>
-        <Link
-          to="/scorecards"
-          className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-        >
-          ← Back to Scorecards
-        </Link>
       </div>
 
       {/* Filters */}

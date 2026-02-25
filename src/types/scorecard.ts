@@ -98,10 +98,23 @@ export interface ScorecardSummary {
   safety_incidents: number;
   bonus_eligible: boolean;
   bonus_amount: number | null;
+  basic_salary: number | null;
+  zig_base_salary: number | null;
   comments: string | null;
   reviewed_by: string | null;
   reviewed_at: string | null;
   status: 'pending' | 'reviewed' | 'finalized';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ZigUsdConversionRate {
+  id: string;
+  year: number;
+  month: number;
+  rate: number;
+  effective_date: string;
+  notes: string | null;
   created_at: string;
   updated_at: string;
 }

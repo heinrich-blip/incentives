@@ -14,6 +14,7 @@ import PerformancePage from "./pages/PerformancePage";
 import ScorecardAdminPage from "./pages/ScorecardAdminPage";
 import ScorecardEmployeesPage from "./pages/ScorecardEmployeesPage";
 import ScorecardPage from "./pages/ScorecardPage";
+import ScorecardAnalyticsPage from "./pages/ScorecardAnalyticsPage";
 import ScorecardTargetsPage from "./pages/ScorecardTargetsPage";
 import SettingsPage from "./pages/SettingsPage";
 import YearComparisonPage from "./pages/YearComparisonPage";
@@ -47,6 +48,7 @@ function AppContent() {
           <Route path="scorecards/admin" element={<ScorecardAdminPage />} />
           <Route path="scorecards/employees" element={<ScorecardEmployeesPage />} />
           <Route path="scorecards/targets" element={<ScorecardTargetsPage />} />
+          <Route path="scorecards/analytics" element={<ScorecardAnalyticsPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Routes>

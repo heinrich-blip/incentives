@@ -1,43 +1,49 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
+import ScorecardSubnav from "../components/ScorecardSubnav";
 import { useScorecardStore } from "../store/useScorecardStore";
-import type {
-    RoleWithKRAs
+import type { RoleWithKRAs } from "../types/scorecard";
+import {
+  calculateAchievementPercentage,
+  getFinalRating,
+  getRatingColor,
+  getScoreFromAchievement,
 } from "../types/scorecard";
-import
-    {
-        calculateAchievementPercentage,
-        getFinalRating,
-        getRatingColor,
-        getScoreFromAchievement,
-    } from "../types/scorecard";
 import { exportScorecardToPDF } from "../utils/exportUtils";
 import { formatPercentage, getMonthName } from "../utils/formatters";
 
 export default function ScorecardPage() {
+  const [searchParams] = useSearchParams();
+  const urlMonth = parseInt(searchParams.get("month") || "") || new Date().getMonth() + 1;
+
   const {
     roles,
     employees,
     scoringRules,
+    targets,
     fetchRoles,
     fetchEmployees,
     fetchScoringRules,
     fetchRoleWithKRAs,
     fetchEntries,
     fetchTargets,
-    targets,
     saveEntries,
     saveSummary,
   } = useScorecardStore();
 
-  const [selectedRole, setSelectedRole] = useState<string>("");
+  // Selection state
   const [selectedEmployee, setSelectedEmployee] = useState<string>("");
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
-  const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
+  
+  // Current month from URL
+  const currentMonth = urlMonth;
+  
+  // Scorecard editor state
   const [roleData, setRoleData] = useState<RoleWithKRAs | null>(null);
   const [entries, setEntries] = useState<Record<string, number>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   // Load initial data
   useEffect(() => {
@@ -46,53 +52,77 @@ export default function ScorecardPage() {
     fetchScoringRules();
   }, [fetchRoles, fetchEmployees, fetchScoringRules]);
 
-  // Load role data when role changes
+  // Auto-select first employee
   useEffect(() => {
-    if (selectedRole) {
-      fetchRoleWithKRAs(selectedRole).then((data) => {
+    if (!selectedEmployee && employees.length > 0) {
+      setSelectedEmployee(employees[0].id);
+    }
+  }, [employees, selectedEmployee]);
+
+  // Get selected employee record
+  const selectedEmployeeRecord = useMemo(() => {
+    return employees.find((e) => e.id === selectedEmployee);
+  }, [employees, selectedEmployee]);
+
+  // Get role for selected employee
+  const employeeRole = useMemo(() => {
+    if (!selectedEmployeeRecord) return null;
+    return roles.find((r) => r.id === selectedEmployeeRecord.role_id) || null;
+  }, [selectedEmployeeRecord, roles]);
+
+  // Load role/targets/entries when month or employee changes
+  useEffect(() => {
+    if (currentMonth && selectedEmployeeRecord) {
+      setIsLoading(true);
+      // Load role data
+      fetchRoleWithKRAs(selectedEmployeeRecord.role_id).then((data) => {
         setRoleData(data);
+      });
+      // Load targets
+      fetchTargets(selectedYear, currentMonth);
+      // Load entries (or copy from previous month if none exist)
+      fetchEntries(selectedEmployee, selectedYear, currentMonth).then(async (data) => {
+        if (data.length > 0) {
+          const entryMap: Record<string, number> = {};
+          data.forEach((entry) => {
+            entryMap[entry.kpi_id] = entry.actual_value;
+          });
+          setEntries(entryMap);
+        } else {
+          // Try to copy from previous month
+          let prevMonth = currentMonth - 1;
+          let prevYear = selectedYear;
+          if (prevMonth < 1) {
+            prevMonth = 12;
+            prevYear -= 1;
+          }
+          const prevEntries = await fetchEntries(selectedEmployee, prevYear, prevMonth);
+          if (prevEntries.length > 0) {
+            const entryMap: Record<string, number> = {};
+            prevEntries.forEach((entry) => {
+              entryMap[entry.kpi_id] = entry.actual_value;
+            });
+            setEntries(entryMap);
+          } else {
+            setEntries({});
+          }
+        }
+        setIsLoading(false);
       });
     } else {
       setRoleData(null);
-    }
-  }, [selectedRole, fetchRoleWithKRAs]);
-
-  // Load targets and entries when selection changes
-  useEffect(() => {
-    fetchTargets(selectedYear, selectedMonth);
-  }, [selectedYear, selectedMonth, fetchTargets]);
-
-  useEffect(() => {
-    if (selectedEmployee && selectedYear && selectedMonth) {
-      fetchEntries(selectedEmployee, selectedYear, selectedMonth).then((data) => {
-        // Pre-fill entries from existing data
-        const entryMap: Record<string, number> = {};
-        data.forEach((entry) => {
-          entryMap[entry.kpi_id] = entry.actual_value;
-        });
-        setEntries(entryMap);
-      });
-    } else {
       setEntries({});
     }
-  }, [selectedEmployee, selectedYear, selectedMonth, fetchEntries]);
+  }, [currentMonth, selectedEmployee, selectedEmployeeRecord, selectedYear, fetchRoleWithKRAs, fetchTargets, fetchEntries]);
 
-  // Filter employees by selected role
-  const filteredEmployees = useMemo(() => {
-    if (!selectedRole) return employees;
-    return employees.filter((e) => e.role_id === selectedRole && e.status === "active");
-  }, [employees, selectedRole]);
-
-  // Get target for a KPI - checks targets table first, then falls back to default_target from KPI
+  // Get target for a KPI
   const getTarget = (kpiId: string, kpi?: { default_target: number | null }): number => {
-    // First check if there's a specific monthly target set
     const target = targets.find(
-      (t) => t.kpi_id === kpiId && t.year === selectedYear && t.month === selectedMonth
+      (t) => t.kpi_id === kpiId && t.year === selectedYear && t.month === currentMonth
     );
     if (target?.target_value !== undefined && target?.target_value !== null) {
       return target.target_value;
     }
-    // Fall back to the KPI's default target
     if (kpi?.default_target !== undefined && kpi?.default_target !== null) {
       return kpi.default_target;
     }
@@ -101,12 +131,12 @@ export default function ScorecardPage() {
 
   // Calculate scores
   const calculateScores = useMemo(() => {
-    if (!roleData) return null;
+    if (!roleData || !currentMonth) return null;
 
     let totalWeightedScore = 0;
     const kraScores = roleData.kras.map((kra) => {
       let kraWeightedScore = 0;
-      
+
       const kpiScores = kra.kpis.map((kpi) => {
         const actual = entries[kpi.id] || 0;
         const target = getTarget(kpi.id, kpi);
@@ -118,7 +148,7 @@ export default function ScorecardPage() {
         const { score } = getScoreFromAchievement(achievementPercent, scoringRules);
         const kpiWeighting = kpi.weighting / 100;
         const weightedScore = score * kpiWeighting;
-        
+
         return {
           kpi,
           target,
@@ -147,7 +177,7 @@ export default function ScorecardPage() {
       totalWeightedScore,
       rating: getFinalRating(totalWeightedScore),
     };
-  }, [roleData, entries, targets, selectedYear, selectedMonth, scoringRules]);
+  }, [roleData, entries, targets, selectedYear, currentMonth, scoringRules]);
 
   // Handle entry change
   const handleEntryChange = (kpiId: string, value: string) => {
@@ -157,7 +187,7 @@ export default function ScorecardPage() {
 
   // Save scorecard
   const handleSave = async () => {
-    if (!selectedEmployee || !roleData || !calculateScores) return;
+    if (!selectedEmployee || !roleData || !calculateScores || !currentMonth) return;
 
     setIsSaving(true);
     try {
@@ -179,7 +209,7 @@ export default function ScorecardPage() {
             employee_id: selectedEmployee,
             kpi_id: kpi.id,
             year: selectedYear,
-            month: selectedMonth,
+            month: currentMonth,
             actual_value: actual,
             target_value: target,
             achievement_percentage: achievementPercent,
@@ -196,16 +226,17 @@ export default function ScorecardPage() {
 
       await saveEntries(entriesToSave);
 
-      // Save summary
       await saveSummary({
         employee_id: selectedEmployee,
         year: selectedYear,
-        month: selectedMonth,
+        month: currentMonth,
         total_weighted_score: calculateScores.totalWeightedScore,
         final_rating: calculateScores.rating,
         safety_incidents: 0,
         bonus_eligible: calculateScores.totalWeightedScore >= 70,
         bonus_amount: null,
+        basic_salary: null,
+        zig_base_salary: null,
         comments: null,
         reviewed_by: null,
         reviewed_at: null,
@@ -221,9 +252,9 @@ export default function ScorecardPage() {
     }
   };
 
-  // Export scorecard to PDF
+  // Export PDF
   const handleExportPDF = () => {
-    if (!calculateScores || !roleData || !selectedEmployee) return;
+    if (!calculateScores || !roleData || !selectedEmployee || !currentMonth) return;
 
     const employee = employees.find((e) => e.id === selectedEmployee);
     if (!employee) return;
@@ -233,8 +264,8 @@ export default function ScorecardPage() {
       employeeId: employee.employee_id,
       roleName: roleData.role_name,
       year: selectedYear,
-      month: selectedMonth,
-      monthName: getMonthName(selectedMonth),
+      month: currentMonth,
+      monthName: getMonthName(currentMonth),
       companyName: "Performance Scorecard",
       kraScores: calculateScores.kraScores.map((kraScore) => ({
         kraName: kraScore.kra.kra_name,
@@ -260,73 +291,28 @@ export default function ScorecardPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="flex flex-col gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Performance Scorecards</h1>
           <p className="text-gray-600 mt-1">
-            Monthly KPI tracking for Transport Officers, Data Analysts, Workshop Supervisors, and Inventory Clerks
+            Create and manage monthly scorecards for employees
           </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Link
-            to="/scorecards/admin"
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            Configure KRAs/KPIs
-          </Link>
-          <Link
-            to="/scorecards/employees"
-            className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-          >
-            Manage Employees
-          </Link>
-          <Link
-            to="/scorecards/targets"
-            className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-          >
-            Set Targets
-          </Link>
+          <ScorecardSubnav className="mt-4" />
         </div>
       </div>
 
-      {/* Filters */}
+      {/* Employee & Year Selection */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {/* Role Filter */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
-            <select
-              value={selectedRole}
-              onChange={(e) => {
-                setSelectedRole(e.target.value);
-                setSelectedEmployee("");
-              }}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="">Select Role...</option>
-              {roles.map((role) => (
-                <option key={role.id} value={role.id}>
-                  {role.role_name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Employee Filter */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Employee</label>
             <select
               value={selectedEmployee}
               onChange={(e) => setSelectedEmployee(e.target.value)}
-              disabled={!selectedRole}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
             >
               <option value="">Select Employee...</option>
-              {filteredEmployees.map((emp) => (
+              {employees.map((emp) => (
                 <option key={emp.id} value={emp.id}>
                   {emp.first_name} {emp.last_name} ({emp.employee_id})
                 </option>
@@ -334,7 +320,6 @@ export default function ScorecardPage() {
             </select>
           </div>
 
-          {/* Year */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Year</label>
             <select
@@ -350,21 +335,14 @@ export default function ScorecardPage() {
             </select>
           </div>
 
-          {/* Month */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Month</label>
-            <select
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-            >
-              {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => (
-                <option key={month} value={month}>
-                  {getMonthName(month)}
-                </option>
-              ))}
-            </select>
-          </div>
+          {employeeRole && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+              <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-700 border border-gray-200">
+                {employeeRole.role_name}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -378,12 +356,33 @@ export default function ScorecardPage() {
         </div>
       )}
 
-      {/* Scorecard Table */}
-      {selectedRole && selectedEmployee && roleData && (
+      {/* Loading state */}
+      {isLoading && selectedEmployee && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center">
+          <div className="animate-spin h-8 w-8 border-4 border-blue-600 border-t-transparent rounded-full mx-auto"></div>
+          <p className="mt-4 text-gray-500">Loading scorecard...</p>
+        </div>
+      )}
+
+      {/* No employee selected */}
+      {!selectedEmployee && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center">
+          <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+          </svg>
+          <h3 className="text-lg font-medium text-gray-900 mb-2">Select an Employee</h3>
+          <p className="text-gray-500">
+            Choose an employee from the dropdown above to view and create their scorecards.
+          </p>
+        </div>
+      )}
+
+      {/* Scorecard Editor */}
+      {!isLoading && selectedEmployee && roleData && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="p-4 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
             <h2 className="text-lg font-semibold text-gray-900">
-              {roleData.role_name} Scorecard - {getMonthName(selectedMonth)} {selectedYear}
+              {roleData.role_name} Scorecard — {getMonthName(currentMonth)} {selectedYear}
             </h2>
             {calculateScores && (
               <div className="flex items-center gap-4">
@@ -504,7 +503,7 @@ export default function ScorecardPage() {
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-              Export to PDF
+              Export PDF
             </button>
             <button
               onClick={handleSave}
@@ -532,49 +531,38 @@ export default function ScorecardPage() {
         </div>
       )}
 
-      {/* No selection message */}
-      {(!selectedRole || !selectedEmployee) && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center">
-          <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-          </svg>
-          <h3 className="text-lg font-medium text-gray-900 mb-2">Select Role and Employee</h3>
-          <p className="text-gray-500">
-            Choose a role and employee from the filters above to view or enter their scorecard data.
-          </p>
+      {/* Legend */}
+      {selectedEmployee && roleData && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+          <h3 className="text-sm font-semibold text-gray-700 mb-3">Scoring Legend</h3>
+          <div className="flex flex-wrap gap-4 text-sm">
+            <span className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-green-500"></span>
+              Excellent (90-100%)
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-blue-500"></span>
+              Very Good (80-90%)
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-cyan-500"></span>
+              Good (70-80%)
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-yellow-500"></span>
+              Satisfactory (60-70%)
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-orange-500"></span>
+              Needs Improvement (50-60%)
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-red-500"></span>
+              Unsatisfactory (&lt;50%)
+            </span>
+          </div>
         </div>
       )}
-
-      {/* Legend */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">Scoring Legend</h3>
-        <div className="flex flex-wrap gap-4 text-sm">
-          <span className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full bg-green-500"></span>
-            Excellent (90-100%)
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full bg-blue-500"></span>
-            Very Good (80-90%)
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full bg-cyan-500"></span>
-            Good (70-80%)
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full bg-yellow-500"></span>
-            Satisfactory (60-70%)
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full bg-orange-500"></span>
-            Needs Improvement (50-60%)
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full bg-red-500"></span>
-            Unsatisfactory (&lt;50%)
-          </span>
-        </div>
-      </div>
     </div>
   );
 }

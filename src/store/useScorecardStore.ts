@@ -10,6 +10,7 @@ import type {
     ScorecardScoringRule,
     ScorecardSummary,
     ScorecardTarget,
+  ZigUsdConversionRate,
 } from "../types/scorecard";
 
 interface ScorecardState {
@@ -21,6 +22,7 @@ interface ScorecardState {
   employees: ScorecardEmployee[];
   entries: ScorecardEntry[];
   summaries: ScorecardSummary[];
+  conversionRates: ZigUsdConversionRate[];
   scoringRules: ScorecardScoringRule[];
   
   // Loading states
@@ -38,6 +40,10 @@ interface ScorecardState {
   fetchTargets: (year: number, month?: number) => Promise<ScorecardTarget[]>;
   fetchEntries: (employeeId: string, year: number, month: number) => Promise<ScorecardEntry[]>;
   fetchSummary: (employeeId: string, year: number, month: number) => Promise<ScorecardSummary | null>;
+  fetchSummaries: (year: number, month?: number) => Promise<ScorecardSummary[]>;
+  updateSummary: (id: string, data: Partial<ScorecardSummary>) => Promise<boolean>;
+  fetchConversionRates: (year: number) => Promise<ZigUsdConversionRate[]>;
+  upsertConversionRate: (year: number, month: number, rate: number) => Promise<boolean>;
   fetchScoringRules: () => Promise<void>;
   
   // Employee CRUD
@@ -78,6 +84,7 @@ export const useScorecardStore = create<ScorecardState>((set, get) => ({
   employees: [],
   entries: [],
   summaries: [],
+  conversionRates: [],
   scoringRules: [],
   isLoading: false,
   error: null,
@@ -301,6 +308,127 @@ export const useScorecardStore = create<ScorecardState>((set, get) => ({
     } catch (error) {
       console.error("Error fetching summary:", error);
       return null;
+    }
+  },
+
+  // Fetch summaries for multiple employees
+  fetchSummaries: async (year: number, month?: number) => {
+    try {
+      set({ isLoading: true, error: null });
+      let query = supabase.from("scorecard_summaries").select("*").eq("year", year);
+      
+      if (month) {
+        query = query.eq("month", month);
+      }
+      
+      const { data, error } = await query;
+      
+      if (error) throw error;
+      set({ summaries: data || [], isLoading: false });
+      return data || [];
+    } catch (error) {
+      console.error("Error fetching summaries:", error);
+      set({ summaries: [], error: (error as Error).message, isLoading: false });
+      return [];
+    }
+  },
+
+  // Update summary (for basic pay, bonus, etc.)
+  updateSummary: async (id: string, data: Partial<ScorecardSummary>) => {
+    try {
+      set({ isLoading: true, error: null });
+      const { data: updatedSummary, error } = await supabase
+        .from("scorecard_summaries")
+        .update(data)
+        .eq("id", id)
+        .select("*")
+        .single();
+      
+      if (error) throw error;
+
+      set((state) => ({
+        summaries: state.summaries.map((summary) =>
+          summary.id === id ? { ...summary, ...updatedSummary } : summary
+        ),
+        isLoading: false,
+      }));
+
+      return true;
+    } catch (error) {
+      console.error("Error updating summary:", error);
+      set({ error: (error as Error).message, isLoading: false });
+      return false;
+    }
+  },
+
+  // Fetch monthly ZIG -> USD conversion rates
+  fetchConversionRates: async (year: number) => {
+    try {
+      set({ isLoading: true, error: null });
+      const { data, error } = await supabase
+        .from("zig_usd_conversion_rates")
+        .select("*")
+        .eq("year", year)
+        .order("month", { ascending: true });
+
+      if (error) throw error;
+      set({ conversionRates: data || [], isLoading: false });
+      return data || [];
+    } catch (error) {
+      console.error("Error fetching conversion rates:", error);
+      set({ conversionRates: [], error: (error as Error).message, isLoading: false });
+      return [];
+    }
+  },
+
+  // Upsert conversion rate for a period
+  upsertConversionRate: async (year: number, month: number, rate: number) => {
+    try {
+      if (!rate || rate <= 0) {
+        throw new Error("Conversion rate must be greater than zero");
+      }
+
+      set({ isLoading: true, error: null });
+      const { data, error } = await supabase
+        .from("zig_usd_conversion_rates")
+        .upsert(
+          {
+            year,
+            month,
+            rate,
+            effective_date: `${year}-${String(month).padStart(2, "0")}-01`,
+          },
+          { onConflict: "year,month" }
+        )
+        .select("*")
+        .single();
+
+      if (error) throw error;
+
+      set((state) => {
+        const existingIndex = state.conversionRates.findIndex(
+          (item) => item.year === year && item.month === month
+        );
+
+        if (existingIndex >= 0) {
+          const updated = [...state.conversionRates];
+          updated[existingIndex] = data as ZigUsdConversionRate;
+          return { conversionRates: updated, isLoading: false };
+        }
+
+        return {
+          conversionRates: [...state.conversionRates, data as ZigUsdConversionRate].sort(
+            (a, b) => a.month - b.month
+          ),
+          isLoading: false,
+        };
+      });
+
+      return true;
+    } catch (error) {
+      console.error("Error upserting conversion rate:", error);
+      set({ error: (error as Error).message, isLoading: false });
+      return false;
     }
   },
 

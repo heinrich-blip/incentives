@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import ScorecardSubnav from "../components/ScorecardSubnav";
 import { useScorecardStore } from "../store/useScorecardStore";
 import type { RoleWithKRAs, ScorecardKPI, ScorecardKRA } from "../types/scorecard";
 
@@ -214,19 +214,14 @@ export default function ScorecardAdminPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="flex flex-col gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Scorecard Configuration</h1>
           <p className="text-gray-600 mt-1">
             Manage KRAs (Key Result Areas) and KPIs (Key Performance Indicators) for each role
           </p>
+          <ScorecardSubnav className="mt-4" />
         </div>
-        <Link
-          to="/scorecards"
-          className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-        >
-          ← Back to Scorecards
-        </Link>
       </div>
 
       {/* Role Selection */}

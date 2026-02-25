@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import ScorecardSubnav from "../components/ScorecardSubnav";
 import { useScorecardStore } from "../store/useScorecardStore";
 import type { ScorecardEmployee } from "../types/scorecard";
 
@@ -129,27 +129,18 @@ export default function ScorecardEmployeesPage() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Scorecard Employees</h1>
-          <p className="text-gray-600 mt-1">
-            Manage employees for the scorecard system
-          </p>
+          <p className="text-gray-600 mt-1">Manage employees for the scorecard system</p>
+          <ScorecardSubnav className="mt-4" />
         </div>
-        <div className="flex gap-2">
-          <Link
-            to="/scorecards"
-            className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-          >
-            ← Back to Scorecards
-          </Link>
-          <button
-            onClick={() => handleOpenModal()}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Add Employee
-          </button>
-        </div>
+        <button
+          onClick={() => handleOpenModal()}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+          Add Employee
+        </button>
       </div>
 
       {/* Filters */}
