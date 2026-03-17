@@ -62,23 +62,114 @@ export interface ExportData {
   calculations: IncentiveCalculation[];
   companyName?: string;
   typeFilter?: "all" | "local" | "export";
+  incentiveSettings?: { setting_key: string; setting_value: any; is_active: boolean }[];
 }
 
 /**
  * Extract fuel bonus from calculation_details if available
+ * Tries multiple possible paths where fuel bonus might be stored
  */
 function getFuelBonusFromCalculation(calc: IncentiveCalculation | undefined): number {
   if (!calc?.calculation_details) return 0;
-  
+
   try {
-    const details = calc.calculation_details as {
-      bonus_breakdown?: {
-        fuel_efficiency_bonus?: number;
-      };
-    };
-    return details.bonus_breakdown?.fuel_efficiency_bonus || 0;
-  } catch {
+    const details = calc.calculation_details as any;
+
+    // Try multiple possible paths where fuel bonus might be stored
+    const possiblePaths = [
+      // Path 1: bonus_breakdown.fuel_efficiency_bonus (current expected path)
+      details.bonus_breakdown?.fuel_efficiency_bonus,
+
+      // Path 2: bonus_breakdown.fuel_bonus (alternative naming)
+      details.bonus_breakdown?.fuel_bonus,
+
+      // Path 3: Direct property at root level
+      details.fuel_efficiency_bonus,
+
+      // Path 4: Direct property at root level with different name
+      details.fuel_bonus,
+
+      // Path 5: Inside bonuses object
+      details.bonuses?.fuel_efficiency,
+      details.bonuses?.fuel_bonus,
+
+      // Path 6: Inside fuel object
+      details.fuel?.bonus,
+      details.fuel?.efficiency_bonus,
+
+      // Path 7: Check if it's a number in any field containing "fuel"
+      ...Object.entries(details)
+        .filter(([key]) => key.toLowerCase().includes('fuel'))
+        .map(([_, value]) => value),
+
+      // Path 8: Check in bonus_breakdown for any field containing "fuel"
+      ...(details.bonus_breakdown ? Object.entries(details.bonus_breakdown)
+        .filter(([key]) => key.toLowerCase().includes('fuel'))
+        .map(([_, value]) => value) : [])
+    ];
+
+    // Find the first valid number greater than 0
+    for (const value of possiblePaths) {
+      if (value !== undefined && value !== null && !isNaN(Number(value))) {
+        const numValue = Number(value);
+        if (numValue > 0) {
+          return numValue;
+        }
+      }
+    }
+
     return 0;
+  } catch (error) {
+    console.error('Error parsing calculation_details:', error);
+    return 0;
+  }
+}
+
+/**
+ * Calculate fuel bonus from performance record using the same logic as AddPerformanceModal
+ * This is used as a fallback when calculation_details doesn't have the fuel bonus
+ */
+function calculateFuelBonusFromPerformance(
+  performance: DriverPerformance | undefined,
+  driverType: "local" | "export",
+  incentiveSettings: { setting_key: string; setting_value: any; is_active: boolean }[]
+): number {
+  if (!performance?.fuel_efficiency) return 0;
+
+  const fuelEfficiency = performance.fuel_efficiency;
+
+  // Get fuel efficiency config based on driver type
+  const configKey = driverType === "local" ? "fuel_efficiency_bonus_local" : "fuel_efficiency_bonus_export";
+  const setting = incentiveSettings.find(s => s.setting_key === configKey && s.is_active);
+
+  if (!setting?.setting_value?.enabled || !setting.setting_value?.tiers?.length) {
+    return 0;
+  }
+
+  const config = setting.setting_value as { enabled: boolean; tiers: { min_efficiency: number; max_efficiency: number; bonus_amount: number }[] };
+
+  const matchingTier = config.tiers.find(
+    (tier) => fuelEfficiency >= tier.min_efficiency && fuelEfficiency < tier.max_efficiency
+  );
+
+  return matchingTier?.bonus_amount || 0;
+}
+
+/**
+ * Debug function to log calculation details (can be removed in production)
+ */
+function debugCalculationDetails(calc: IncentiveCalculation | undefined, driverName: string) {
+  if (!calc?.calculation_details || process.env.NODE_ENV !== 'development') return;
+
+  try {
+    console.log(`📊 Fuel bonus debug for ${driverName}:`, {
+      calculation_id: calc.id,
+      total_incentive: calc.total_incentive,
+      calculation_details: calc.calculation_details,
+      extracted_fuel_bonus: getFuelBonusFromCalculation(calc)
+    });
+  } catch (e) {
+    // Silent fail for debug
   }
 }
 
@@ -86,18 +177,25 @@ function getFuelBonusFromCalculation(calc: IncentiveCalculation | undefined): nu
  * Generate monthly summary data for export including fuel bonus
  */
 function generateMonthlySummary(data: ExportData): MonthlyIncentiveData[] {
-  const { year, month: selectedMonth, drivers, performance, calculations, typeFilter = "all" } = data;
+  const { year, month: selectedMonth, drivers, performance, calculations, typeFilter = "all", incentiveSettings = [] } = data;
 
   const filteredDrivers = drivers.filter(
     (d) => d.status === "active" && (typeFilter === "all" || d.driver_type === typeFilter)
   );
   const driverIds = new Set(filteredDrivers.map((d) => d.id));
 
+  // Create a map of performance records for quick lookup
+  const performanceMap = new Map<string, DriverPerformance>();
+  performance.forEach(p => {
+    const key = `${p.driver_id}-${p.year}-${p.month}`;
+    performanceMap.set(key, p);
+  });
+
   const months: MonthlyIncentiveData[] = [];
 
   // Determine which months to process
-  const monthsToProcess = selectedMonth && selectedMonth !== "all" 
-    ? [selectedMonth] 
+  const monthsToProcess = selectedMonth && selectedMonth !== "all"
+    ? [selectedMonth]
     : Array.from({ length: 12 }, (_, i) => i + 1);
 
   for (const month of monthsToProcess) {
@@ -107,6 +205,15 @@ function generateMonthlySummary(data: ExportData): MonthlyIncentiveData[] {
     const monthCalc = calculations.filter(
       (c) => c.year === year && c.month === month && driverIds.has(c.driver_id)
     );
+
+    // Debug: Log calculations for February
+    if (month === 2 && year === 2026 && process.env.NODE_ENV === 'development') {
+      console.log(`🔍 February ${year} calculations:`, monthCalc.length);
+      monthCalc.forEach(calc => {
+        const driver = drivers.find(d => d.id === calc.driver_id);
+        debugCalculationDetails(calc, driver ? `${driver.first_name} ${driver.last_name}` : 'Unknown');
+      });
+    }
 
     // Separate by type
     const localDrivers = filteredDrivers.filter((d) => d.driver_type === "local");
@@ -118,34 +225,52 @@ function generateMonthlySummary(data: ExportData): MonthlyIncentiveData[] {
     const localKm = monthPerf
       .filter((p) => localDriverIds.has(p.driver_id))
       .reduce((sum, p) => sum + p.actual_kilometers, 0);
-    
+
     const localIncentive = monthCalc
       .filter((c) => localDriverIds.has(c.driver_id))
       .reduce((sum, c) => sum + (c.total_incentive || 0), 0);
-    
-    // Get local fuel bonus from stored calculation_details
+
+    // Get local fuel bonus - try from calculation first, then fallback to recalculating from performance
     const localFuelBonus = monthCalc
       .filter((c) => localDriverIds.has(c.driver_id))
       .reduce((sum, c) => sum + getFuelBonusFromCalculation(c), 0);
+
+    // Add fallback: calculate fuel bonus from performance records that don't have calculations
+    const localPerfWithoutCalc = monthPerf.filter(
+      (p) => localDriverIds.has(p.driver_id) && !monthCalc.find(c => c.driver_id === p.driver_id)
+    );
+    const localFallbackBonus = localPerfWithoutCalc.reduce((sum, p) => {
+      const driver = drivers.find(d => d.id === p.driver_id);
+      return sum + calculateFuelBonusFromPerformance(p, driver?.driver_type || "local", incentiveSettings);
+    }, 0);
 
     // Calculate totals for export drivers
     const exportKm = monthPerf
       .filter((p) => exportDriverIds.has(p.driver_id))
       .reduce((sum, p) => sum + p.actual_kilometers, 0);
-    
+
     const exportIncentive = monthCalc
       .filter((c) => exportDriverIds.has(c.driver_id))
       .reduce((sum, c) => sum + (c.total_incentive || 0), 0);
-    
-    // Get export fuel bonus from stored calculation_details
+
+    // Get export fuel bonus - try from calculation first, then fallback to recalculating from performance
     const exportFuelBonus = monthCalc
       .filter((c) => exportDriverIds.has(c.driver_id))
       .reduce((sum, c) => sum + getFuelBonusFromCalculation(c), 0);
 
-    // Calculate overall totals
+    // Add fallback: calculate fuel bonus from performance records that don't have calculations
+    const exportPerfWithoutCalc = monthPerf.filter(
+      (p) => exportDriverIds.has(p.driver_id) && !monthCalc.find(c => c.driver_id === p.driver_id)
+    );
+    const exportFallbackBonus = exportPerfWithoutCalc.reduce((sum, p) => {
+      const driver = drivers.find(d => d.id === p.driver_id);
+      return sum + calculateFuelBonusFromPerformance(p, driver?.driver_type || "export", incentiveSettings);
+    }, 0);
+
+    // Calculate overall totals (including fallback bonuses)
     const totalKm = localKm + exportKm;
     const totalIncentive = localIncentive + exportIncentive;
-    const totalFuelBonus = localFuelBonus + exportFuelBonus;
+    const totalFuelBonus = localFuelBonus + localFallbackBonus + exportFuelBonus + exportFallbackBonus;
     const totalCombined = totalIncentive + totalFuelBonus;
     const driverCount = monthPerf.length;
 
@@ -161,10 +286,10 @@ function generateMonthlySummary(data: ExportData): MonthlyIncentiveData[] {
       avgFuelBonus: driverCount > 0 ? totalFuelBonus / driverCount : 0,
       localKm,
       localIncentive,
-      localFuelBonus,
+      localFuelBonus: localFuelBonus + localFallbackBonus,
       exportKm,
       exportIncentive,
-      exportFuelBonus,
+      exportFuelBonus: exportFuelBonus + exportFallbackBonus,
     });
   }
 
@@ -175,15 +300,15 @@ function generateMonthlySummary(data: ExportData): MonthlyIncentiveData[] {
  * Generate driver-level monthly data including fuel bonus
  */
 function generateDriverMonthlyData(data: ExportData): DriverMonthlyData[] {
-  const { year, month: selectedMonth, drivers, performance, calculations, typeFilter = "all" } = data;
+  const { year, month: selectedMonth, drivers, performance, calculations, typeFilter = "all", incentiveSettings = [] } = data;
 
   const filteredDrivers = drivers.filter(
     (d) => d.status === "active" && (typeFilter === "all" || d.driver_type === typeFilter)
   );
 
   // Determine which months to include
-  const monthsToInclude = selectedMonth && selectedMonth !== "all" 
-    ? [selectedMonth] 
+  const monthsToInclude = selectedMonth && selectedMonth !== "all"
+    ? [selectedMonth]
     : Array.from({ length: 12 }, (_, i) => i + 1);
 
   return filteredDrivers.map((driver) => {
@@ -197,10 +322,15 @@ function generateDriverMonthlyData(data: ExportData): DriverMonthlyData[] {
     const monthlyData = monthsToInclude.map((month) => {
       const perf = driverPerf.find((p) => p.month === month);
       const calc = driverCalc.find((c) => c.month === month);
-      
+
       const incentive = calc?.total_incentive || 0;
       // Get fuel bonus from the stored calculation_details
-      const fuelBonus = getFuelBonusFromCalculation(calc);
+      let fuelBonus = getFuelBonusFromCalculation(calc);
+      
+      // Fallback: if no calculation or fuel bonus is 0, calculate from performance
+      if ((!calc || fuelBonus === 0) && perf?.fuel_efficiency) {
+        fuelBonus = calculateFuelBonusFromPerformance(perf, driver.driver_type, incentiveSettings);
+      }
 
       return {
         month,
@@ -240,7 +370,7 @@ export function exportToPDF(data: ExportData): void {
   const isSingleMonth = selectedMonth && selectedMonth !== "all";
 
   // Determine period label
-  const periodLabel = isSingleMonth 
+  const periodLabel = isSingleMonth
     ? `${getMonthName(selectedMonth)} ${year}`
     : `Full Year ${year}`;
 
@@ -420,8 +550,8 @@ export function exportToPDF(data: ExportData): void {
   }
 
   // Generate filename
-  const filenamePeriod = isSingleMonth 
-    ? `${getMonthName(selectedMonth)}_${year}` 
+  const filenamePeriod = isSingleMonth
+    ? `${getMonthName(selectedMonth)}_${year}`
     : `${year}`;
 
   // Save
@@ -437,7 +567,7 @@ export function exportToExcel(data: ExportData): void {
 
   // Determine period label
   const isSingleMonth = selectedMonth && selectedMonth !== "all";
-  const periodLabel = isSingleMonth 
+  const periodLabel = isSingleMonth
     ? `${getMonthName(selectedMonth)} ${year}`
     : `Full Year ${year}`;
 
@@ -473,7 +603,7 @@ export function exportToExcel(data: ExportData): void {
         d.totalCombined,
       ]),
       [],
-      ["TOTAL", "", "", 
+      ["TOTAL", "", "",
         driverData.reduce((s, d) => s + d.totalKm, 0),
         driverData.reduce((s, d) => s + d.totalIncentive, 0),
         driverData.reduce((s, d) => s + d.totalFuelBonus, 0),
@@ -563,8 +693,8 @@ export function exportToExcel(data: ExportData): void {
   }
 
   // Generate filename
-  const filenamePeriod = isSingleMonth 
-    ? `${getMonthName(selectedMonth)}_${year}` 
+  const filenamePeriod = isSingleMonth
+    ? `${getMonthName(selectedMonth)}_${year}`
     : `${year}`;
 
   // Save
@@ -613,10 +743,10 @@ export interface ScorecardExportData {
  * Export scorecard to PDF
  */
 export function exportScorecardToPDF(data: ScorecardExportData): void {
-  const { 
-    employeeName, 
-    employeeId, 
-    roleName, 
+  const {
+    employeeName,
+    employeeId,
+    roleName,
     year,
     monthName,
     companyName = "Performance Scorecard",
@@ -624,7 +754,7 @@ export function exportScorecardToPDF(data: ScorecardExportData): void {
     totalWeightedScore,
     rating
   } = data;
-  
+
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
 
@@ -752,7 +882,7 @@ export function exportScorecardToPDF(data: ScorecardExportData): void {
   // Get rating color
   let ratingBgColor: [number, number, number] = [243, 244, 246];
   let ratingTextColor: [number, number, number] = [55, 65, 81];
-  
+
   switch (rating) {
     case "Excellent":
       ratingBgColor = [220, 252, 231];
@@ -805,7 +935,7 @@ export function exportScorecardToPDF(data: ScorecardExportData): void {
   doc.setFontSize(9);
   doc.setTextColor(107, 114, 128);
   doc.text("Performance Rating Scale:", 14, legendY);
-  
+
   const legends = [
     { color: [34, 197, 94] as [number, number, number], text: "Excellent (90-100%)" },
     { color: [59, 130, 246] as [number, number, number], text: "Very Good (80-90%)" },
@@ -888,16 +1018,16 @@ export interface DriverEarningsExportData {
  * Export Driver Earnings Report to PDF with charts
  */
 export function exportDriverEarningsToPDF(data: DriverEarningsExportData): void {
-  const { 
-    driver, 
-    year, 
+  const {
+    driver,
+    year,
     companyName = "Driver Incentives",
     monthlyEarnings,
     yearOverYearData,
     annualSummary,
-    chartImages 
+    chartImages
   } = data;
-  
+
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -936,13 +1066,13 @@ export function exportDriverEarningsToPDF(data: DriverEarningsExportData): void 
   // Driver Info Box
   doc.setFillColor(249, 250, 251);
   doc.roundedRect(14, 52, pageWidth - 28, 25, 3, 3, "F");
-  
+
   doc.setFontSize(10);
   doc.setTextColor(33, 37, 41);
   doc.text("Employee ID:", 20, 62);
   doc.text("Driver Type:", 80, 62);
   doc.text("Status:", 140, 62);
-  
+
   doc.setTextColor(59, 130, 246);
   doc.text(driver.employee_id || "N/A", 20, 70);
   doc.text(driver.driver_type === "local" ? "Local" : "Export", 80, 70);
@@ -1004,7 +1134,7 @@ export function exportDriverEarningsToPDF(data: DriverEarningsExportData): void 
   const summaryY = doc.lastAutoTable.finalY + 10;
   doc.setFillColor(239, 246, 255);
   doc.roundedRect(14, summaryY, pageWidth - 28, 20, 3, 3, "F");
-  
+
   doc.setFontSize(10);
   doc.setTextColor(59, 130, 246);
   doc.text("Incentive Impact:", 20, summaryY + 8);
@@ -1014,7 +1144,7 @@ export function exportDriverEarningsToPDF(data: DriverEarningsExportData): void 
   doc.setFontSize(9);
   doc.setTextColor(108, 117, 125);
   doc.text("of total earnings came from incentives and bonuses", 80, summaryY + 8);
-  
+
   doc.setFontSize(10);
   doc.setTextColor(59, 130, 246);
   doc.text("Monthly Average:", 20, summaryY + 16);
@@ -1027,7 +1157,7 @@ export function exportDriverEarningsToPDF(data: DriverEarningsExportData): void 
 
   // ============ PAGE 2: Monthly Earnings Table ============
   let currentY = addNewPage();
-  
+
   doc.setFontSize(14);
   doc.setTextColor(33, 37, 41);
   doc.text(`Monthly Earnings Breakdown - ${year}`, 14, currentY);
@@ -1096,7 +1226,7 @@ export function exportDriverEarningsToPDF(data: DriverEarningsExportData): void 
   // ============ PAGE 3: Charts (if provided) ============
   if (chartImages) {
     currentY = addNewPage();
-    
+
     doc.setFontSize(14);
     doc.setTextColor(33, 37, 41);
     doc.text("Earnings Visualizations", 14, currentY);
@@ -1108,7 +1238,7 @@ export function exportDriverEarningsToPDF(data: DriverEarningsExportData): void 
       doc.setTextColor(108, 117, 125);
       doc.text("Monthly Earnings Breakdown", 14, currentY);
       currentY += 3;
-      
+
       try {
         doc.addImage(chartImages.earningsChart, "PNG", 14, currentY, pageWidth - 28, 70);
         currentY += 75;
@@ -1123,7 +1253,7 @@ export function exportDriverEarningsToPDF(data: DriverEarningsExportData): void 
       doc.setTextColor(108, 117, 125);
       doc.text("Year-over-Year Comparison", 14, currentY);
       currentY += 3;
-      
+
       try {
         doc.addImage(chartImages.yearOverYearChart, "PNG", 14, currentY, pageWidth - 28, 70);
         currentY += 75;
@@ -1135,14 +1265,14 @@ export function exportDriverEarningsToPDF(data: DriverEarningsExportData): void 
     // New page for more charts if needed
     if (chartImages.cumulativeChart || chartImages.pieChart) {
       currentY = addNewPage();
-      
+
       // Cumulative Growth Chart
       if (chartImages.cumulativeChart) {
         doc.setFontSize(10);
         doc.setTextColor(108, 117, 125);
         doc.text("Cumulative Earnings Growth", 14, currentY);
         currentY += 3;
-        
+
         try {
           doc.addImage(chartImages.cumulativeChart, "PNG", 14, currentY, pageWidth - 28, 70);
           currentY += 75;
@@ -1157,7 +1287,7 @@ export function exportDriverEarningsToPDF(data: DriverEarningsExportData): void 
         doc.setTextColor(108, 117, 125);
         doc.text("Incentive Distribution", 14, currentY);
         currentY += 3;
-        
+
         try {
           doc.addImage(chartImages.pieChart, "PNG", 14, currentY, 80, 60);
         } catch (e) {
@@ -1170,7 +1300,7 @@ export function exportDriverEarningsToPDF(data: DriverEarningsExportData): void 
   // ============ PAGE: Year-over-Year Data Table ============
   if (yearOverYearData && yearOverYearData.length > 0) {
     currentY = addNewPage();
-    
+
     doc.setFontSize(14);
     doc.setTextColor(33, 37, 41);
     doc.text(`Year-over-Year Comparison: ${year - 1} vs ${year}`, 14, currentY);
@@ -1223,7 +1353,7 @@ export function exportDriverEarningsToPDF(data: DriverEarningsExportData): void 
   // ============ PAGE: Annual Summary (Multi-Year) ============
   if (annualSummary && annualSummary.length > 1) {
     currentY = addNewPage();
-    
+
     doc.setFontSize(14);
     doc.setTextColor(33, 37, 41);
     doc.text("Multi-Year Earnings Summary", 14, currentY);
@@ -1265,7 +1395,7 @@ export function exportDriverEarningsToPDF(data: DriverEarningsExportData): void 
       doc.setFontSize(10);
       doc.setTextColor(108, 117, 125);
       doc.text("Annual Earnings Trend", 14, chartY);
-      
+
       try {
         doc.addImage(chartImages.annualChart, "PNG", 14, chartY + 3, pageWidth - 28, 70);
       } catch (e) {
@@ -1310,14 +1440,14 @@ export async function captureChartAsImage(chartElementId: string): Promise<strin
       console.error(`Element with id "${chartElementId}" not found`);
       return null;
     }
-    
+
     const canvas = await html2canvas(element, {
       backgroundColor: "#ffffff",
       scale: 2, // Higher resolution
       logging: false,
       useCORS: true,
     });
-    
+
     return canvas.toDataURL("image/png");
   } catch (error) {
     console.error("Failed to capture chart:", error);
@@ -1336,7 +1466,7 @@ export async function captureAllCharts(chartIds: {
   annualChart?: string;
 }): Promise<DriverEarningsExportData["chartImages"]> {
   const images: DriverEarningsExportData["chartImages"] = {};
-  
+
   if (chartIds.earningsChart) {
     images.earningsChart = await captureChartAsImage(chartIds.earningsChart) || undefined;
   }
@@ -1352,7 +1482,6 @@ export async function captureAllCharts(chartIds: {
   if (chartIds.annualChart) {
     images.annualChart = await captureChartAsImage(chartIds.annualChart) || undefined;
   }
-  
+
   return images;
 }
-

@@ -1,30 +1,28 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import
-    {
-        Bar,
-        BarChart,
-        CartesianGrid,
-        Legend,
-        Line,
-        LineChart,
-        ResponsiveContainer,
-        Tooltip,
-        XAxis,
-        YAxis,
-    } from 'recharts';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { useStore } from "../store/useStore";
 import type { Driver, DriverPerformance } from "../types/database";
 import { exportToExcel, exportToPDF } from "../utils/exportUtils";
-import
-    {
-        formatCurrency,
-        formatNumber,
-        formatPercentage,
-        generateInitials,
-        getMonthName,
-        getMonthShortName,
-    } from "../utils/formatters";
+import {
+  formatCurrency,
+  formatNumber,
+  formatPercentage,
+  generateInitials,
+  getMonthName,
+  getMonthShortName,
+} from "../utils/formatters";
 
 interface DriverYearData {
   driver: Driver;
@@ -50,6 +48,7 @@ export default function YearComparisonPage() {
     driverPerformance,
     monthlyBudgets,
     incentiveCalculations,
+    incentiveSettings,
   } = useStore();
 
   const [selectedMonth, setSelectedMonth] = useState<number | "all">("all");
@@ -68,6 +67,7 @@ export default function YearComparisonPage() {
       calculations: incentiveCalculations,
       companyName: "Driver Incentives",
       typeFilter,
+      incentiveSettings,
     });
   };
 
@@ -79,6 +79,7 @@ export default function YearComparisonPage() {
       calculations: incentiveCalculations,
       companyName: "Driver Incentives",
       typeFilter,
+      incentiveSettings,
     });
   };
 
@@ -411,8 +412,8 @@ export default function YearComparisonPage() {
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-2">Select Year</p>
               </div>
               <div className="p-2 border-b border-gray-100">
-                <select 
-                  className="w-full form-select text-sm py-1.5" 
+                <select
+                  className="w-full form-select text-sm py-1.5"
                   value={exportYear}
                   onChange={(e) => setExportYear(parseInt(e.target.value))}
                 >
@@ -426,8 +427,8 @@ export default function YearComparisonPage() {
                   className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-md transition-colors"
                 >
                   <svg className="w-4 h-4 text-red-500" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM6 20V4h5v7h7v9H6z"/>
-                    <path d="M8.5 13h1.25v2.5h-.75v-1.75h-.5v-.75zm3.75.875c0-.345-.17-.625-.5-.625-.33 0-.5.28-.5.625s.17.625.5.625c.33 0 .5-.28.5-.625zm.75 0c0 .69-.56 1.375-1.25 1.375S10.5 14.565 10.5 13.875s.56-1.375 1.25-1.375 1.25.685 1.25 1.375zm1.25-.375h.5v-.75h-.5v.75zm1.25-.75v2.5h-.75v-2.5h-.25v-.75h.25v-.5h.75v.5h.25v.75h-.25z"/>
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM6 20V4h5v7h7v9H6z" />
+                    <path d="M8.5 13h1.25v2.5h-.75v-1.75h-.5v-.75zm3.75.875c0-.345-.17-.625-.5-.625-.33 0-.5.28-.5.625s.17.625.5.625c.33 0 .5-.28.5-.625zm.75 0c0 .69-.56 1.375-1.25 1.375S10.5 14.565 10.5 13.875s.56-1.375 1.25-1.375 1.25.685 1.25 1.375zm1.25-.375h.5v-.75h-.5v.75zm1.25-.75v2.5h-.75v-2.5h-.25v-.75h.25v-.5h.75v.5h.25v.75h-.25z" />
                   </svg>
                   Export to PDF
                 </button>
@@ -436,8 +437,8 @@ export default function YearComparisonPage() {
                   className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-md transition-colors"
                 >
                   <svg className="w-4 h-4 text-green-600" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM6 20V4h5v7h7v9H6z"/>
-                    <path d="M8 13l1.5 2.25L11 13h1l-2 3 2 3h-1l-1.5-2.25L8 19H7l2-3-2-3h1z"/>
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM6 20V4h5v7h7v9H6z" />
+                    <path d="M8 13l1.5 2.25L11 13h1l-2 3 2 3h-1l-1.5-2.25L8 19H7l2-3-2-3h1z" />
                   </svg>
                   Export to Excel
                 </button>
@@ -484,23 +485,20 @@ export default function YearComparisonPage() {
             <div>
               <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">KM Change</p>
               <p
-                className={`text-2xl font-bold mt-1 ${
-                  totals.kmChange >= 0 ? "text-green-600" : "text-red-600"
-                }`}
+                className={`text-2xl font-bold mt-1 ${totals.kmChange >= 0 ? "text-green-600" : "text-red-600"
+                  }`}
               >
                 {totals.kmChange >= 0 ? "+" : ""}
                 {formatNumber(totals.kmChange)}
               </p>
             </div>
             <div
-              className={`w-10 h-10 rounded-full ${
-                totals.kmChange >= 0 ? "bg-green-50" : "bg-red-50"
-              } flex items-center justify-center`}
+              className={`w-10 h-10 rounded-full ${totals.kmChange >= 0 ? "bg-green-50" : "bg-red-50"
+                } flex items-center justify-center`}
             >
               <svg
-                className={`w-5 h-5 ${
-                  totals.kmChange >= 0 ? "text-green-600" : "text-red-600"
-                }`}
+                className={`w-5 h-5 ${totals.kmChange >= 0 ? "text-green-600" : "text-red-600"
+                  }`}
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -602,19 +600,19 @@ export default function YearComparisonPage() {
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Driver</th>
                 <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                <th 
+                <th
                   className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer"
                   onClick={() => handleSort('totalKm2025')}
                 >
                   2025 KM {getSortIcon('totalKm2025')}
                 </th>
-                <th 
+                <th
                   className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer"
                   onClick={() => handleSort('totalKm2026')}
                 >
                   2026 KM {getSortIcon('totalKm2026')}
                 </th>
-                <th 
+                <th
                   className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer"
                   onClick={() => handleSort('kmChange')}
                 >
@@ -622,13 +620,13 @@ export default function YearComparisonPage() {
                 </th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">2025 Incentive</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">2026 Incentive</th>
-                <th 
+                <th
                   className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer"
                   onClick={() => handleSort('avgAchievement2025')}
                 >
                   2025 Avg % {getSortIcon('avgAchievement2025')}
                 </th>
-                <th 
+                <th
                   className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer"
                   onClick={() => handleSort('avgAchievement2026')}
                 >
@@ -661,11 +659,10 @@ export default function YearComparisonPage() {
                     </td>
                     <td className="px-6 py-4 text-center">
                       <span
-                        className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
-                          data.driver.driver_type === "export"
+                        className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${data.driver.driver_type === "export"
                             ? "bg-blue-100 text-blue-800"
                             : "bg-gray-100 text-gray-800"
-                        }`}
+                          }`}
                       >
                         {data.driver.driver_type}
                       </span>
@@ -678,11 +675,10 @@ export default function YearComparisonPage() {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <span
-                        className={`font-mono text-sm ${
-                          data.kmChange >= 0
+                        className={`font-mono text-sm ${data.kmChange >= 0
                             ? "text-green-600"
                             : "text-red-600"
-                        }`}
+                          }`}
                       >
                         {data.kmChange >= 0 ? "+" : ""}
                         {formatNumber(data.kmChange)}
@@ -700,26 +696,24 @@ export default function YearComparisonPage() {
                     </td>
                     <td className="px-6 py-4 text-center">
                       <span
-                        className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
-                          data.year2025.avgAchievement >= 100
+                        className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${data.year2025.avgAchievement >= 100
                             ? "bg-green-100 text-green-800"
                             : data.year2025.avgAchievement >= 90
-                            ? "bg-yellow-100 text-yellow-800"
-                            : "bg-red-100 text-red-800"
-                        }`}
+                              ? "bg-yellow-100 text-yellow-800"
+                              : "bg-red-100 text-red-800"
+                          }`}
                       >
                         {formatPercentage(data.year2025.avgAchievement)}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-center">
                       <span
-                        className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
-                          data.year2026.avgAchievement >= 100
+                        className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${data.year2026.avgAchievement >= 100
                             ? "bg-green-100 text-green-800"
                             : data.year2026.avgAchievement >= 90
-                            ? "bg-yellow-100 text-yellow-800"
-                            : "bg-red-100 text-red-800"
-                        }`}
+                              ? "bg-yellow-100 text-yellow-800"
+                              : "bg-red-100 text-red-800"
+                          }`}
                       >
                         {formatPercentage(data.year2026.avgAchievement)}
                       </span>
@@ -768,11 +762,10 @@ export default function YearComparisonPage() {
                 </td>
                 <td className="px-6 py-4 text-right">
                   <span
-                    className={`font-mono text-sm ${
-                      totals.kmChange >= 0
+                    className={`font-mono text-sm ${totals.kmChange >= 0
                         ? "text-green-600"
                         : "text-red-600"
-                    }`}
+                      }`}
                   >
                     {totals.kmChange >= 0 ? "+" : ""}
                     {formatNumber(totals.kmChange)}

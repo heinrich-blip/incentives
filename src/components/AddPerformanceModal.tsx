@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import { useStore } from "../store/useStore";
-import type { Driver, DriverPerformance } from "../types/database";
-import
-    {
-        formatCurrency,
-        formatNumber,
-        getMonthName,
-    } from "../utils/formatters";
+import type { Driver, DriverPerformance, FuelEfficiencyTier } from "../types/database";
+import { getFuelEfficiencyConfig } from "../utils/calculations";
+import {
+  formatCurrency,
+  formatNumber,
+  getMonthName,
+} from "../utils/formatters";
 
 interface AddPerformanceModalProps {
   driver?: Driver;
@@ -85,8 +85,6 @@ export default function AddPerformanceModal({
   }, [budget]);
 
   // Calculate the rate per kilometer and estimated incentive
-  // Formula: Rate per KM = Divisor ÷ Target KM per Truck
-  // Incentive = Rate per KM × Driver's Actual KM
   const calculatedIncentive = useMemo(() => {
     if (!budget || targetKmPerTruck <= 0) {
       return { ratePerKm: 0, incentive: 0 };
@@ -96,8 +94,20 @@ export default function AddPerformanceModal({
     return { ratePerKm, incentive };
   }, [budget, incentiveDivisor, targetKmPerTruck, formData.actual_kilometers]);
 
-  // Check if a performance record already exists for this period (for new entries)
-  // or use the existing performance passed in (for editing)
+  // Calculate fuel efficiency bonus
+  const fuelBonus = useMemo(() => {
+    if (!selectedDriver || !formData.fuel_efficiency) return 0;
+    const fuelEfficiency = parseFloat(formData.fuel_efficiency);
+    if (isNaN(fuelEfficiency)) return 0;
+    const config = getFuelEfficiencyConfig(incentiveSettings, selectedDriver.driver_type);
+    if (!config.enabled || config.tiers.length === 0) return 0;
+    const matchingTier = config.tiers.find(
+      (tier: FuelEfficiencyTier) => fuelEfficiency >= tier.min_efficiency && fuelEfficiency < tier.max_efficiency
+    );
+    return matchingTier?.bonus_amount || 0;
+  }, [formData.fuel_efficiency, selectedDriver, incentiveSettings]);
+
+  // Check if a performance record already exists for this period
   const existingRecord = useMemo(() => {
     if (existingPerformance) return existingPerformance;
     if (!selectedDriverId) return null;
@@ -210,19 +220,20 @@ export default function AddPerformanceModal({
 
       if (error) throw error;
 
-      // Also create/update incentive calculation
+      // Also create/update incentive calculation with proper fuel bonus storage
       const incentiveData = {
         driver_id: selectedDriverId,
         year: formData.year,
         month: formData.month,
         base_salary: selectedDriver?.base_salary || 0,
         km_incentive: calculatedIncentive.incentive,
+        fuel_bonus: fuelBonus, // Store fuel bonus as a separate field if exists in schema
         performance_bonus: 0,
         safety_bonus: 0,
         deductions: 0,
-        total_incentive: calculatedIncentive.incentive,
+        total_incentive: calculatedIncentive.incentive + fuelBonus,
         total_earnings:
-          (selectedDriver?.base_salary || 0) + calculatedIncentive.incentive,
+          (selectedDriver?.base_salary || 0) + calculatedIncentive.incentive + fuelBonus,
         calculation_details: {
           budget_km: budget?.budgeted_kilometers || 0,
           truck_count: budget?.truck_count || 1,
@@ -230,6 +241,23 @@ export default function AddPerformanceModal({
           divisor: incentiveDivisor,
           rate_per_km: calculatedIncentive.ratePerKm,
           actual_km: formData.actual_kilometers,
+          bonus_breakdown: {
+            fuel_efficiency: formData.fuel_efficiency ? parseFloat(formData.fuel_efficiency) : null,
+            fuel_efficiency_bonus: fuelBonus,
+            fuel_efficiency_tier: (() => {
+              if (!formData.fuel_efficiency || !selectedDriver) return null;
+              const config = getFuelEfficiencyConfig(incentiveSettings, selectedDriver.driver_type);
+              if (!config.enabled) return null;
+              const fuelEfficiency = parseFloat(formData.fuel_efficiency);
+              const matchingTier = config.tiers.find(
+                (tier: FuelEfficiencyTier) => fuelEfficiency >= tier.min_efficiency && fuelEfficiency < tier.max_efficiency
+              );
+              return matchingTier ? `${matchingTier.min_efficiency}-${matchingTier.max_efficiency} km/L` : null;
+            })(),
+            safety_bonus: 0,
+            on_time_bonus: 0,
+            customer_bonus: 0,
+          },
         },
         status: "draft" as const,
       };
@@ -486,19 +514,27 @@ export default function AddPerformanceModal({
                     {formatNumber(formData.actual_kilometers)} km
                   </span>
                 </div>
+                {fuelBonus > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-green-700">Fuel Efficiency Bonus:</span>
+                    <span className="font-medium text-green-800">
+                      {formatCurrency(fuelBonus)}
+                    </span>
+                  </div>
+                )}
                 <div className="h-px bg-green-200 my-2" />
                 <div className="flex justify-between text-base">
                   <span className="font-medium text-green-700">
-                    Calculated Incentive:
+                    Total Incentive:
                   </span>
                   <span className="font-bold text-green-800">
-                    {formatCurrency(calculatedIncentive.incentive)}
+                    {formatCurrency(calculatedIncentive.incentive + fuelBonus)}
                   </span>
                 </div>
               </div>
               <p className="text-xs text-green-600 mt-3">
                 Formula: Target KM/Truck = Budget ÷ Trucks → Rate = Divisor ÷
-                Target → Incentive = Rate × KM
+                Target → Incentive = Rate × KM {fuelBonus > 0 ? "+ Fuel Bonus" : ""}
               </p>
             </div>
           )}

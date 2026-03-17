@@ -1,8 +1,13 @@
 import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
+import { useScorecardStore } from "../store/useScorecardStore";
 import { useStore } from "../store/useStore";
-import type { Driver } from "../types/database";
+import type {
+  Accident,
+  DisciplinaryRecord, Driver, Incident,
+  LeaveRecord
+} from "../types/database";
 
 export function useRealtimeData() {
   const {
@@ -116,6 +121,38 @@ export function useRealtimeData() {
     [addDriver, updateDriver, removeDriver, showToast],
   );
 
+  // ========== SCORECARD REALTIME HANDLERS ==========
+  const scorecardStore = useScorecardStore();
+
+  const handleScorecardRoleChange = useCallback(async () => {
+    await scorecardStore.fetchRoles();
+  }, [scorecardStore]);
+
+  const handleScorecardEmployeeChange = useCallback(async () => {
+    await scorecardStore.fetchEmployees();
+  }, [scorecardStore]);
+
+  const handleScorecardTargetChange = useCallback(async () => {
+    const year = new Date().getFullYear();
+    await scorecardStore.fetchTargets(year);
+  }, [scorecardStore]);
+
+  const handleScorecardEntryChange = useCallback(async () => {
+    // Entries are employee-specific, so we refresh current state
+    const { employees } = scorecardStore;
+    if (employees.length > 0) {
+      const year = new Date().getFullYear();
+      const month = new Date().getMonth() + 1;
+      await scorecardStore.fetchSummaries(year, month);
+    }
+  }, [scorecardStore]);
+
+  const handleScorecardSummaryChange = useCallback(async () => {
+    const year = new Date().getFullYear();
+    const month = new Date().getMonth() + 1;
+    await scorecardStore.fetchSummaries(year, month);
+  }, [scorecardStore]);
+
   // Handle realtime rate changes
   const handleRateChange = useCallback(async () => {
     const { data } = await supabase
@@ -189,7 +226,6 @@ export function useRealtimeData() {
   useEffect(() => {
     if (!isSupabaseConfigured()) return;
 
-    // Fetch initial data when the hook is mounted
     fetchInitialData();
 
     // Create realtime subscriptions
@@ -240,6 +276,32 @@ export function useRealtimeData() {
         { event: "*", schema: "public", table: "incentive_calculations" },
         handleCalculationChange,
       )
+      // Scorecard realtime subscriptions
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "scorecard_roles" },
+        handleScorecardRoleChange,
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "scorecard_employees" },
+        handleScorecardEmployeeChange,
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "scorecard_targets" },
+        handleScorecardTargetChange,
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "scorecard_entries" },
+        handleScorecardEntryChange,
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "scorecard_summaries" },
+        handleScorecardSummaryChange,
+      )
       .subscribe();
 
     return () => {
@@ -256,6 +318,11 @@ export function useRealtimeData() {
     handleFormulaChange,
     handlePerformanceChange,
     handleCalculationChange,
+    handleScorecardRoleChange,
+    handleScorecardEmployeeChange,
+    handleScorecardTargetChange,
+    handleScorecardEntryChange,
+    handleScorecardSummaryChange,
   ]);
 
   return { refetch: fetchInitialData };
@@ -389,12 +456,4 @@ export function useDriverRecords(driverId: string | undefined) {
 
   return { ...records, loading };
 }
-
-import { useState } from "react";
-import type {
-  Accident,
-  DisciplinaryRecord,
-  Incident,
-  LeaveRecord,
-} from "../types/database";
 

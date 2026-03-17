@@ -1,26 +1,51 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import AddPerformanceModal from "../components/AddPerformanceModal";
 import BulkPerformanceModal from "../components/BulkPerformanceModal";
 import { useStore } from "../store/useStore";
-import type { DriverPerformance, FuelEfficiencyTier } from "../types/database";
-import
-  {
-    DEFAULT_EXPORT_FUEL_TIERS,
-    DEFAULT_LOCAL_FUEL_TIERS,
-    getFuelEfficiencyConfig,
-  } from "../utils/calculations";
+import type { DriverPerformance, IncentiveCalculation } from "../types/database";
 import { exportToExcel, exportToPDF } from "../utils/exportUtils";
-import
-  {
-    calculateAchievementPercentage,
-    formatCurrency,
-    formatNumber,
-    formatPercentage,
-    generateInitials,
-    getAchievementColor,
-    getMonthName,
-  } from "../utils/formatters";
+import {
+  calculateAchievementPercentage,
+  formatCurrency,
+  formatNumber,
+  formatPercentage,
+  generateInitials,
+  getAchievementColor,
+  getMonthName,
+} from "../utils/formatters";
+
+// Helper function to extract fuel bonus from calculation_details
+const getFuelBonusFromCalculation = (calculation?: IncentiveCalculation): number => {
+  if (!calculation?.calculation_details) return 0;
+
+  try {
+    const details = calculation.calculation_details as {
+      bonus_breakdown?: {
+        fuel_efficiency_bonus?: number;
+      };
+    };
+    return details.bonus_breakdown?.fuel_efficiency_bonus || 0;
+  } catch {
+    return 0;
+  }
+};
+
+// Helper function to extract fuel efficiency from calculation_details
+const getFuelEfficiencyFromCalculation = (calculation?: IncentiveCalculation): number | null => {
+  if (!calculation?.calculation_details) return null;
+
+  try {
+    const details = calculation.calculation_details as {
+      bonus_breakdown?: {
+        fuel_efficiency?: number;
+      };
+    };
+    return details.bonus_breakdown?.fuel_efficiency || null;
+  } catch {
+    return null;
+  }
+};
 
 export default function PerformancePage() {
   const {
@@ -58,6 +83,7 @@ export default function PerformancePage() {
       calculations: incentiveCalculations,
       companyName: "Driver Incentives",
       typeFilter,
+      incentiveSettings,
     });
     setShowExportMenu(false);
   };
@@ -71,6 +97,7 @@ export default function PerformancePage() {
       calculations: incentiveCalculations,
       companyName: "Driver Incentives",
       typeFilter,
+      incentiveSettings,
     });
     setShowExportMenu(false);
   };
@@ -90,35 +117,7 @@ export default function PerformancePage() {
     return setting ? (setting.setting_value as number) : 1;
   }, [incentiveSettings]);
 
-  // Get fuel efficiency bonus configs (use defaults if not configured)
-  const localFuelConfig = useMemo(() => {
-    const config = getFuelEfficiencyConfig(incentiveSettings, "local");
-    if (!config.enabled || config.tiers.length === 0) {
-      return DEFAULT_LOCAL_FUEL_TIERS;
-    }
-    return config;
-  }, [incentiveSettings]);
-
-  const exportFuelConfig = useMemo(() => {
-    const config = getFuelEfficiencyConfig(incentiveSettings, "export");
-    if (!config.enabled || config.tiers.length === 0) {
-      return DEFAULT_EXPORT_FUEL_TIERS;
-    }
-    return config;
-  }, [incentiveSettings]);
-
-  // Helper to calculate fuel bonus
-  const calculateFuelBonus = (fuelEfficiency: number | null, driverType: "local" | "export"): number => {
-    if (!fuelEfficiency) return 0;
-    const config = driverType === "export" ? exportFuelConfig : localFuelConfig;
-    if (!config.enabled) return 0;
-    const matchingTier = config.tiers.find(
-      (tier: FuelEfficiencyTier) => fuelEfficiency >= tier.min_efficiency && fuelEfficiency < tier.max_efficiency
-    );
-    return matchingTier?.bonus_amount || 0;
-  };
-
-  // Get all performance data for the selected year
+  // Get all performance data for the selected year - USING STORED CALCULATION VALUES
   const yearPerformance = useMemo(() => {
     return driverPerformance
       .filter((p) => p.year === selectedYear)
@@ -133,29 +132,45 @@ export default function PerformancePage() {
         const totalBudget = budget?.budgeted_kilometers || 0;
         const truckCount = budget?.truck_count || 1;
         const targetPerTruck = truckCount > 0 ? totalBudget / truckCount : 0;
-        // Use target per truck for achievement calculation (individual driver target)
         const achievement = calculateAchievementPercentage(
           p.actual_kilometers,
           targetPerTruck,
         );
-        const divisor =
-          driver?.driver_type === "export" ? exportDivisor : localDivisor;
-        const ratePerKm =
-          targetPerTruck > 0 && divisor > 0 ? divisor / targetPerTruck : 0;
+
+        // Find the associated calculation record
+        const calculation = incentiveCalculations.find(
+          (c) =>
+            c.driver_id === p.driver_id &&
+            c.year === p.year &&
+            c.month === p.month
+        );
+
+        // Get fuel bonus from stored calculation (don't recalculate)
+        const fuelBonus = getFuelBonusFromCalculation(calculation);
+
+        // Get fuel efficiency from stored calculation if available, otherwise use performance record
+        const fuelEfficiency = getFuelEfficiencyFromCalculation(calculation) ?? p.fuel_efficiency;
+
+        // Calculate KM incentive (this can be recalculated as it's based on formula that doesn't change)
+        const divisor = driver?.driver_type === "export" ? exportDivisor : localDivisor;
+        const ratePerKm = targetPerTruck > 0 && divisor > 0 ? divisor / targetPerTruck : 0;
         const kmIncentive = p.actual_kilometers * ratePerKm;
-        const fuelBonus = calculateFuelBonus(p.fuel_efficiency, driver?.driver_type || "local");
-        const incentiveTotal = kmIncentive + fuelBonus;
+
+        // Use stored total incentive if available, otherwise calculate
+        const incentiveTotal = calculation?.total_incentive ?? (kmIncentive + fuelBonus);
 
         return {
           ...p,
           driver,
-          target: targetPerTruck, // Use per-truck target for display
-          totalBudget, // Keep total budget for reference
+          target: targetPerTruck,
+          totalBudget,
           truckCount,
           achievement,
           kmIncentive,
-          fuelBonus,
+          fuelBonus, // Use stored value from calculation
           incentiveTotal,
+          calculation, // Include for reference
+          fuel_efficiency: fuelEfficiency, // Use stored value from calculation
         };
       })
       .filter(
@@ -167,13 +182,28 @@ export default function PerformancePage() {
     driverPerformance,
     drivers,
     monthlyBudgets,
+    incentiveCalculations,
     localDivisor,
     exportDivisor,
-    localFuelConfig,
-    exportFuelConfig,
     selectedYear,
     typeFilter,
   ]);
+
+  // Debug function to verify fuel data (can be removed in production)
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'development') {
+      const withFuel = yearPerformance.filter(p => p.fuelBonus > 0);
+      console.log(`📊 Fuel Bonus Stats: ${withFuel.length} records with fuel bonus`);
+      if (withFuel.length > 0) {
+        console.log('Sample fuel record:', {
+          driver: withFuel[0].driver?.first_name,
+          fuelBonus: withFuel[0].fuelBonus,
+          fuelEfficiency: withFuel[0].fuel_efficiency,
+          hasCalculation: !!withFuel[0].calculation
+        });
+      }
+    }
+  }, [yearPerformance]);
 
   // Get available months that have data
   const availableMonths = useMemo(() => {
@@ -183,10 +213,10 @@ export default function PerformancePage() {
 
   // Filter by selected month
   const filteredPerformance = useMemo(() => {
-    const data = selectedMonth === "all" 
-      ? yearPerformance 
+    const data = selectedMonth === "all"
+      ? yearPerformance
       : yearPerformance.filter((p) => p.month === selectedMonth);
-    
+
     return data.sort((a, b) => {
       let comparison = 0;
       switch (sortBy) {
@@ -210,7 +240,7 @@ export default function PerformancePage() {
   // Group performance by month for table display
   const performanceByMonth = useMemo(() => {
     const grouped: Record<number, typeof filteredPerformance> = {};
-    
+
     if (selectedMonth === "all") {
       availableMonths.forEach((month) => {
         grouped[month] = filteredPerformance.filter((p) => p.month === month);
@@ -218,7 +248,7 @@ export default function PerformancePage() {
     } else {
       grouped[selectedMonth] = filteredPerformance;
     }
-    
+
     return grouped;
   }, [filteredPerformance, selectedMonth, availableMonths]);
 
@@ -233,7 +263,7 @@ export default function PerformancePage() {
         ? data.reduce((sum, p) => sum + p.achievement, 0) / data.length
         : 0;
     const aboveTarget = data.filter((p) => p.achievement >= 100).length;
-    
+
     // Calculate average fuel efficiency (only for entries with fuel data)
     const dataWithFuel = data.filter((p) => p.fuel_efficiency !== null && p.fuel_efficiency > 0);
     const avgFuelEfficiency = dataWithFuel.length > 0
@@ -241,7 +271,17 @@ export default function PerformancePage() {
       : null;
     const fuelDataCount = dataWithFuel.length;
 
-    return { total, totalTarget, totalIncentives, totalFuelBonus, avgAchievement, aboveTarget, count: data.length, avgFuelEfficiency, fuelDataCount };
+    return {
+      total,
+      totalTarget,
+      totalIncentives,
+      totalFuelBonus,
+      avgAchievement,
+      aboveTarget,
+      count: data.length,
+      avgFuelEfficiency,
+      fuelDataCount
+    };
   }, [filteredPerformance]);
 
   const handleSort = (field: typeof sortBy) => {
@@ -331,8 +371,8 @@ export default function PerformancePage() {
             </button>
             {showExportMenu && (
               <>
-                <div 
-                  className="fixed inset-0 z-40" 
+                <div
+                  className="fixed inset-0 z-40"
                   onClick={() => setShowExportMenu(false)}
                 />
                 <div className="absolute right-0 top-full mt-1 w-64 bg-white border border-surface-200 rounded-lg shadow-lg z-50">
@@ -422,7 +462,7 @@ export default function PerformancePage() {
         <div className="bg-white rounded-lg border border-surface-200 p-3">
           <p className="text-xs text-surface-500 uppercase tracking-wider font-medium">Avg Fuel Eff.</p>
           <p className="text-xl font-semibold text-blue-600 mt-1">
-            {stats.avgFuelEfficiency !== null ? `${stats.avgFuelEfficiency.toFixed(2)}` : "N/A"}
+            {stats.avgFuelEfficiency !== null ? `${stats.avgFuelEfficiency.toFixed(2)} km/L` : "N/A"}
           </p>
           {stats.fuelDataCount > 0 && (
             <p className="text-xs text-surface-500 mt-0.5">
@@ -456,11 +496,10 @@ export default function PerformancePage() {
           <div className="flex items-center gap-1 overflow-x-auto pb-1 lg:pb-0">
             <button
               onClick={() => setSelectedMonth("all")}
-              className={`px-3 py-1.5 rounded text-xs font-medium whitespace-nowrap transition-colors ${
-                selectedMonth === "all"
+              className={`px-3 py-1.5 rounded text-xs font-medium whitespace-nowrap transition-colors ${selectedMonth === "all"
                   ? "bg-surface-900 text-white"
                   : "bg-surface-100 text-surface-600 hover:bg-surface-200"
-              }`}
+                }`}
             >
               All Months
             </button>
@@ -471,13 +510,12 @@ export default function PerformancePage() {
                   key={month}
                   onClick={() => setSelectedMonth(month)}
                   disabled={!hasData}
-                  className={`px-3 py-1.5 rounded text-xs font-medium whitespace-nowrap transition-colors ${
-                    selectedMonth === month
+                  className={`px-3 py-1.5 rounded text-xs font-medium whitespace-nowrap transition-colors ${selectedMonth === month
                       ? "bg-surface-900 text-white"
                       : hasData
                         ? "bg-surface-100 text-surface-600 hover:bg-surface-200"
                         : "bg-surface-50 text-surface-300 cursor-not-allowed"
-                  }`}
+                    }`}
                 >
                   {getMonthName(month).slice(0, 3)}
                 </button>
@@ -559,7 +597,7 @@ export default function PerformancePage() {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-surface-100">
-                        <th 
+                        <th
                           className="text-left px-4 py-2.5 text-xs font-semibold text-surface-600 uppercase tracking-wider cursor-pointer hover:text-surface-900"
                           onClick={() => handleSort("name")}
                         >
@@ -568,7 +606,7 @@ export default function PerformancePage() {
                         <th className="text-left px-4 py-2.5 text-xs font-semibold text-surface-600 uppercase tracking-wider">
                           Type
                         </th>
-                        <th 
+                        <th
                           className="text-right px-4 py-2.5 text-xs font-semibold text-surface-600 uppercase tracking-wider cursor-pointer hover:text-surface-900"
                           onClick={() => handleSort("km")}
                         >
@@ -577,7 +615,7 @@ export default function PerformancePage() {
                         <th className="text-right px-4 py-2.5 text-xs font-semibold text-surface-600 uppercase tracking-wider">
                           Target/Truck
                         </th>
-                        <th 
+                        <th
                           className="text-right px-4 py-2.5 text-xs font-semibold text-surface-600 uppercase tracking-wider cursor-pointer hover:text-surface-900"
                           onClick={() => handleSort("achievement")}
                         >
@@ -620,11 +658,10 @@ export default function PerformancePage() {
                             </Link>
                           </td>
                           <td className="px-4 py-2.5">
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                              item.driver?.driver_type === "export"
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${item.driver?.driver_type === "export"
                                 ? "bg-amber-100 text-amber-700"
                                 : "bg-primary-100 text-primary-700"
-                            }`}>
+                              }`}>
                               {item.driver?.driver_type === "local" ? "Local" : "Export"}
                             </span>
                           </td>
@@ -642,13 +679,12 @@ export default function PerformancePage() {
                             <div className="flex items-center justify-end gap-2">
                               <div className="w-16 h-1.5 bg-surface-100 rounded-full overflow-hidden">
                                 <div
-                                  className={`h-full rounded-full ${
-                                    item.achievement >= 100
+                                  className={`h-full rounded-full ${item.achievement >= 100
                                       ? "bg-green-500"
                                       : item.achievement >= 80
                                         ? "bg-yellow-500"
                                         : "bg-red-500"
-                                  }`}
+                                    }`}
                                   style={{ width: `${Math.min(item.achievement, 100)}%` }}
                                 />
                               </div>
@@ -664,7 +700,7 @@ export default function PerformancePage() {
                           </td>
                           <td className="px-4 py-2.5 text-right">
                             <span className="text-sm text-surface-600">
-                              {item.fuel_efficiency ? `${item.fuel_efficiency} km/l` : "-"}
+                              {item.fuel_efficiency ? `${item.fuel_efficiency.toFixed(2)} km/L` : "-"}
                             </span>
                           </td>
                           <td className="px-4 py-2.5 text-right">
@@ -740,15 +776,22 @@ export default function PerformancePage() {
                               const driversWithFuel = data.filter((p) => p.fuel_efficiency !== null && p.fuel_efficiency > 0);
                               if (driversWithFuel.length === 0) return "-";
                               const avgFuel = driversWithFuel.reduce((sum, p) => sum + (p.fuel_efficiency || 0), 0) / driversWithFuel.length;
-                              return `${avgFuel.toFixed(2)} km/l`;
+                              return `${avgFuel.toFixed(2)} km/L`;
                             })()}
                           </span>
                         </td>
                         <td className="px-4 py-2.5"></td>
                         <td className="px-4 py-2.5 text-right">
-                          <span className="text-sm font-bold text-green-600">
-                            {formatCurrency(data.reduce((sum, p) => sum + p.incentiveTotal, 0))}
-                          </span>
+                          <div>
+                            <span className="text-sm font-bold text-green-600">
+                              {formatCurrency(data.reduce((sum, p) => sum + p.incentiveTotal, 0))}
+                            </span>
+                            {data.reduce((sum, p) => sum + p.fuelBonus, 0) > 0 && (
+                              <p className="text-xs text-green-500">
+                                fuel: {formatCurrency(data.reduce((sum, p) => sum + p.fuelBonus, 0))}
+                              </p>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-2.5"></td>
                       </tr>

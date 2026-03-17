@@ -2,6 +2,7 @@ import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { useStore } from "../store/useStore";
+import { RefreshButton, RefreshIndicator } from "./RefreshButton";
 
 const navigation = [
   {
@@ -393,8 +394,10 @@ export default function Layout() {
               </div>
             )}
           </div>
-          <div className="hidden lg:flex items-center gap-3">
-            <span className="text-sm text-surface-500">
+          <div className="flex items-center gap-4">
+            <RefreshIndicator />
+            <RefreshButton size="sm" showStatus={false} />
+            <span className="text-sm text-surface-500 hidden lg:block">
               {new Date().toLocaleDateString("en-US", {
                 weekday: "long",
                 year: "numeric",
